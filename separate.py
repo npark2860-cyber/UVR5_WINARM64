@@ -22,6 +22,7 @@ from lib_v5.optional_deps import librosa
 import math
 import time
 import numpy as np
+import onnx
 import onnxruntime as ort
 import os
 import torch
@@ -700,6 +701,14 @@ class SeperateMDXC(SeperateAttributes):
     def _create_mdx23c_arm64_ort_session(self, mdx_segment_size):
         onnx_path = self._mdx23c_arm64_onnx_path(mdx_segment_size)
 
+        if os.path.isfile(onnx_path) and os.path.isfile(self.model_path):
+            if os.path.getmtime(onnx_path) < os.path.getmtime(self.model_path):
+                print(
+                    "[ARM64 ORT] Model checkpoint is newer than ONNX cache; rebuilding.",
+                    flush=True,
+                )
+                os.remove(onnx_path)
+
         if os.path.isfile(onnx_path):
             try:
                 cache_check_options = ort.SessionOptions()
@@ -824,6 +833,153 @@ class SeperateMDXC(SeperateAttributes):
 
         return session
 
+    def _mdx23c_arm64_qnn_path(self, mdx_segment_size):
+        model_root, _ = os.path.splitext(self.model_path)
+        return f"{model_root}.winarm64_qnn_b1_t{mdx_segment_size}.onnx"
+
+    def _ensure_mdx23c_arm64_qnn_model(self, mdx_segment_size):
+        dynamic_path = self._mdx23c_arm64_onnx_path(mdx_segment_size)
+        static_path = self._mdx23c_arm64_qnn_path(mdx_segment_size)
+
+        # Reuse the already-tested CPU ORT builder to guarantee the real
+        # checkpoint has a valid dynamic ONNX cache.
+        if (
+            not os.path.isfile(dynamic_path)
+            or (
+                os.path.isfile(self.model_path)
+                and os.path.getmtime(dynamic_path) < os.path.getmtime(self.model_path)
+            )
+        ):
+            bootstrap_session = self._create_mdx23c_arm64_ort_session(
+                mdx_segment_size
+            )
+            del bootstrap_session
+
+        rebuild_static = (
+            not os.path.isfile(static_path)
+            or os.path.getmtime(static_path) < os.path.getmtime(dynamic_path)
+        )
+
+        if rebuild_static:
+            print(
+                f"[ARM64 QNN] Creating static NPU graph: "
+                f"{os.path.basename(static_path)}",
+                flush=True,
+            )
+
+            model = onnx.load(dynamic_path)
+            replacements = 0
+            for value in (
+                list(model.graph.input)
+                + list(model.graph.output)
+                + list(model.graph.value_info)
+            ):
+                tensor_type = value.type.tensor_type
+                if not tensor_type.HasField("shape"):
+                    continue
+
+                for dim in tensor_type.shape.dim:
+                    if dim.HasField("dim_param"):
+                        if dim.dim_param == "batch":
+                            dim.dim_value = 1
+                            replacements += 1
+                        elif dim.dim_param == "frames":
+                            dim.dim_value = int(mdx_segment_size)
+                            replacements += 1
+
+            if replacements == 0:
+                raise RuntimeError(
+                    "MDX23C ONNX graph has no dynamic batch/frames dimensions."
+                )
+
+            temp_path = f"{static_path}.tmp"
+            if os.path.isfile(temp_path):
+                os.remove(temp_path)
+
+            try:
+                onnx.checker.check_model(model)
+                onnx.save(model, temp_path)
+                os.replace(temp_path, static_path)
+            except Exception:
+                if os.path.isfile(temp_path):
+                    os.remove(temp_path)
+                raise
+
+            print(
+                f"[ARM64 QNN] Static graph ready "
+                f"fixed_dims={replacements}",
+                flush=True,
+            )
+
+        return static_path
+
+    def _create_mdx23c_arm64_qnn_session(self, mdx_segment_size):
+        import onnxruntime_qnn as qnn_ep
+
+        static_path = self._ensure_mdx23c_arm64_qnn_model(
+            mdx_segment_size
+        )
+
+        ep_name = "QNNExecutionProvider"
+        qnn_devices = [
+            device
+            for device in ort.get_ep_devices()
+            if device.ep_name == ep_name
+        ]
+
+        if not qnn_devices:
+            ort.register_execution_provider_library(
+                ep_name,
+                qnn_ep.get_library_path(),
+            )
+            qnn_devices = [
+                device
+                for device in ort.get_ep_devices()
+                if device.ep_name == ep_name
+            ]
+
+        if not qnn_devices:
+            raise RuntimeError(
+                "QNN plugin registered but no Snapdragon QNN device was found."
+            )
+
+        options = ort.SessionOptions()
+        options.graph_optimization_level = (
+            ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+        )
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        options.add_session_config_entry(
+            "session.disable_cpu_ep_fallback",
+            "1",
+        )
+        options.add_provider_for_devices(
+            qnn_devices,
+            {
+                "backend_path": qnn_ep.get_qnn_htp_path(),
+                "htp_performance_mode": "burst",
+                "htp_graph_finalization_optimization_mode": "3",
+            },
+        )
+
+        print(
+            f"[ARM64 QNN] Compiling MDX23C for Snapdragon NPU "
+            f"frames={mdx_segment_size}",
+            flush=True,
+        )
+        session_started = time.perf_counter()
+        session = ort.InferenceSession(
+            static_path,
+            sess_options=options,
+        )
+        print(
+            f"[ARM64 QNN] NPU session ready elapsed="
+            f"{time.perf_counter() - session_started:.3f}s",
+            flush=True,
+        )
+
+        return session
+
     def demix(self, mix):
         sr_pitched = 441000
         org_mix = mix
@@ -839,45 +995,67 @@ class SeperateMDXC(SeperateAttributes):
             if self.is_mdx_c_seg_def
             else self.mdx_segment_size
         )
-        batch_size = self.mdx_batch_size
-
         use_arm64_ort = (
             IS_WINDOWS_ARM64
             and str(self.device).startswith("cpu")
         )
+        use_arm64_qnn = False
 
         model = None
         ort_session = None
         stft_helper = None
 
         if use_arm64_ort:
+            S = (
+                1
+                if self.mdx_c_configs.training.target_instrument
+                else len(self.mdx_c_configs.training.instruments)
+            )
+            stft_helper = STFT(
+                self.mdx_c_configs.audio.n_fft,
+                self.mdx_c_configs.audio.hop_length,
+                self.mdx_c_configs.audio.dim_f,
+            )
+
             try:
-                S = (
-                    1
-                    if self.mdx_c_configs.training.target_instrument
-                    else len(self.mdx_c_configs.training.instruments)
-                )
-                stft_helper = STFT(
-                    self.mdx_c_configs.audio.n_fft,
-                    self.mdx_c_configs.audio.hop_length,
-                    self.mdx_c_configs.audio.dim_f,
-                )
-                ort_session = self._create_mdx23c_arm64_ort_session(
+                ort_session = self._create_mdx23c_arm64_qnn_session(
                     mdx_segment_size
                 )
+                use_arm64_qnn = True
                 print(
-                    f"[ARM64 ORT] MDX23C backend=ONNXRuntime "
+                    f"[ARM64 QNN] MDX23C backend=Snapdragon NPU "
                     f"model={self.model_basename}",
                     flush=True,
                 )
-            except Exception as exc:
+                self.write_to_console(" Snapdragon NPU (QNN)...")
+            except Exception as qnn_exc:
                 print(
-                    f"[ARM64 ORT] Falling back to PyTorch: "
-                    f"{type(exc).__name__}: {exc}",
+                    f"[ARM64 QNN] NPU unavailable; using CPU ORT: "
+                    f"{type(qnn_exc).__name__}: {qnn_exc}",
                     flush=True,
                 )
-                self.write_to_console(" ARM64 ONNX fallback -> PyTorch...")
-                use_arm64_ort = False
+
+                try:
+                    ort_session = self._create_mdx23c_arm64_ort_session(
+                        mdx_segment_size
+                    )
+                    print(
+                        f"[ARM64 ORT] MDX23C backend=ONNXRuntime CPU "
+                        f"model={self.model_basename}",
+                        flush=True,
+                    )
+                except Exception as ort_exc:
+                    print(
+                        f"[ARM64 ORT] Falling back to PyTorch: "
+                        f"{type(ort_exc).__name__}: {ort_exc}",
+                        flush=True,
+                    )
+                    self.write_to_console(
+                        " ARM64 ONNX fallback -> PyTorch..."
+                    )
+                    use_arm64_ort = False
+
+        batch_size = 1 if use_arm64_qnn else self.mdx_batch_size
 
         if not use_arm64_ort:
             model = TFC_TDF_net(self.mdx_c_configs).eval().to(self.device)
@@ -928,7 +1106,7 @@ class SeperateMDXC(SeperateAttributes):
 
                 if batch_index == 1:
                     first_batch_started = time.perf_counter()
-                    backend = "ORT" if use_arm64_ort else "PyTorch"
+                    backend = ("QNN-NPU" if use_arm64_qnn else "ORT-CPU") if use_arm64_ort else "PyTorch"
                     print(
                         f"[ARM64 DIAG] MDX23C first batch START "
                         f"backend={backend} model={self.model_basename} "
@@ -960,7 +1138,7 @@ class SeperateMDXC(SeperateAttributes):
                     )
                     print(
                         f"[ARM64 DIAG] MDX23C first batch DONE "
-                        f"backend={'ORT' if use_arm64_ort else 'PyTorch'} "
+                        f"backend={('QNN-NPU' if use_arm64_qnn else 'ORT-CPU') if use_arm64_ort else 'PyTorch'} "
                         f"elapsed={first_batch_elapsed:.3f}s",
                         flush=True,
                     )
