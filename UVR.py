@@ -41,7 +41,13 @@ from kthread import KThread
 from lib_v5 import spec_utils
 from pathlib  import Path
 from separate import SeperateDemucs, SeperateMDX, SeperateMDXC, SeperateVR, save_format
-from playsound import playsound
+if os.name == "nt":
+    import winsound
+
+    def playsound(path):
+        winsound.PlaySound(path, winsound.SND_FILENAME)
+else:
+    from playsound import playsound
 from typing import List
 import onnx
 import re
