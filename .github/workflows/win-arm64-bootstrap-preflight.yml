@@ -15,11 +15,14 @@ on:
 jobs:
   python-syntax:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Compile Python sources
         run: python -m compileall -q UVR.py separate.py demucs lib_v5 gui_data scripts
 
@@ -44,11 +47,14 @@ jobs:
 
   package-availability:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Validate package pins exist
         run: |
           python -m pip install --upgrade pip
@@ -56,19 +62,52 @@ jobs:
 
   arm64-wheel-resolution:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - python-version: "3.12"
+            abi: cp312
+          - python-version: "3.13"
+            abi: cp313
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Resolve CPython 3.12 Windows ARM64 native wheels
+          python-version: ${{ matrix.python-version }}
+      - name: Resolve Windows ARM64 native wheels
         run: |
           python -m pip install --upgrade pip
           python -m pip download \
             --dest wheelhouse \
             --only-binary=:all: \
             --platform win_arm64 \
-            --python-version 3.12 \
+            --python-version ${{ matrix.python-version }} \
             --implementation cp \
-            --abi cp312 \
+            --abi ${{ matrix.abi }} \
             -r requirements-win-arm64-native.txt
+
+  pytorch-arm64-wheel:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - python-version: "3.12"
+            abi: cp312
+          - python-version: "3.13"
+            abi: cp313
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Resolve PyTorch Windows ARM64 wheel
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip download \
+            --dest torch-wheelhouse \
+            --only-binary=:all: \
+            --platform win_arm64 \
+            --python-version ${{ matrix.python-version }} \
+            --implementation cp \
+            --abi ${{ matrix.abi }} \
+            --index-url https://download.pytorch.org/whl/cpu \
+            "torch==2.14.0+cpu"

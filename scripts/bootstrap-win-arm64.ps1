@@ -7,9 +7,9 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
-Write-Host "[1/6] Checking host Python architecture"
-& $PythonExe -c "import platform,sys; print(sys.version); print(platform.machine()); assert platform.machine().upper() in ('ARM64','AARCH64'), 'Native ARM64 Python required'"
-if ($LASTEXITCODE -ne 0) { throw "Native ARM64 Python is required" }
+Write-Host "[1/6] Checking host Python architecture and version"
+& $PythonExe -c "import platform,sys; print(sys.version); print(platform.machine()); assert platform.machine().upper() in ('ARM64','AARCH64'), 'Native ARM64 Python required'; assert sys.version_info[:2] in ((3,12),(3,13)), 'Python 3.12 or 3.13 required'"
+if ($LASTEXITCODE -ne 0) { throw "Native ARM64 Python 3.12 or 3.13 is required" }
 
 $Venv = Join-Path $RepoRoot ".venv-arm64"
 if (-not (Test-Path $Venv)) {
@@ -27,7 +27,7 @@ Write-Host "[3/6] Updating pip"
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 
 Write-Host "[4/6] Installing native Windows ARM64 PyTorch CPU"
-& $VenvPython -m pip install "torch==2.12.1+cpu" --index-url "https://download.pytorch.org/whl/cpu"
+& $VenvPython -m pip install "torch==2.14.0+cpu" --index-url "https://download.pytorch.org/whl/cpu"
 if ($LASTEXITCODE -ne 0) { throw "PyTorch ARM64 installation failed" }
 
 Write-Host "[5/6] Installing ARM64 bootstrap dependencies"

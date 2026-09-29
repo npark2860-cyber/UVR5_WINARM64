@@ -11,15 +11,15 @@ The `main` branch remains the untouched baseline.
 
 ## Phase 1 goal
 
-Start the UVR 5.6 GUI under **native CPython 3.12 Windows ARM64** without
-Prism/x64 emulation.
+Start the UVR 5.6 GUI under **native CPython 3.12 or 3.13 Windows ARM64**
+without Prism/x64 emulation.
 
 This phase does not claim full processing parity. It establishes the native
 runtime and identifies the next real blockers with minimal source changes.
 
 ## Architecture-sensitive packages selected
 
-- PyTorch: `2.12.1+cpu`, official Windows ARM64 CPU wheel
+- PyTorch: `2.14.0+cpu`, official Windows ARM64 CPU wheel
 - NumPy: `2.3.5`, Windows ARM64 wheel
 - SciPy: `1.16.3`, Windows ARM64 wheel
 - ONNX: `1.23.0`, Windows ARM64 wheel
@@ -30,14 +30,15 @@ runtime and identifies the next real blockers with minimal source changes.
 - PyYAML: `6.0.3`, Windows ARM64 wheel
 - cffi: `2.1.1`, Windows ARM64 wheel
 
+CI validates the native binary package set for both CPython 3.12 (`cp312`)
+and CPython 3.13 (`cp313`) Windows ARM64.
+
 ## Dependencies intentionally deferred
 
 ### librosa / numba / llvmlite
 
-UVR 5.6 uses librosa for loading, resampling, STFT and ISTFT. Current
-CPython 3.12 Windows ARM64 availability does not provide a clean matching
-numba/llvmlite path. Phase 1 therefore lazy-loads librosa instead of importing
-it at process startup.
+UVR 5.6 uses librosa for loading, resampling, STFT and ISTFT. Phase 1
+lazy-loads librosa instead of importing it at process startup.
 
 Phase 2 must replace the required librosa subset with ARM64-native primitives
 or validate another compatible implementation before processing parity is
@@ -61,10 +62,10 @@ startup dependencies.
 
 ### diffq
 
-Demucs imports diffq at module load time, but PyPI does not provide a CPython
-3.12 Windows ARM64 wheel. The port routes those imports through
-`demucs/diffq_compat.py`. Non-quantized paths can load without diffq; a path
-that actually requires diffq fails explicitly instead of preventing GUI startup.
+Demucs imports diffq at module load time, but the native bootstrap does not
+depend on it. The port routes those imports through `demucs/diffq_compat.py`.
+Non-quantized paths can load without diffq; a path that actually requires
+diffq fails explicitly instead of preventing GUI startup.
 
 ### PyTorch Lightning
 
@@ -80,9 +81,9 @@ From native Windows ARM64 PowerShell:
 .\scripts\bootstrap-win-arm64.ps1 -Launch
 ```
 
-The script rejects an x64 Python interpreter. A passing probe is therefore
-evidence that the Python runtime and core numerical/ML dependencies are
-actually native ARM64.
+The script rejects x64 Python and Python versions other than 3.12/3.13. A
+passing probe is therefore evidence that the Python runtime and core
+numerical/ML dependencies are actually native ARM64.
 
 ## Phase 1 PASS condition
 
