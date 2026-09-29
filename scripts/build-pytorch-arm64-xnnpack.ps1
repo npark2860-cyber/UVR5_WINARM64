@@ -69,19 +69,77 @@ Write-Host "[1/9] Checking native ARM64 Python"
 Invoke-Checked $PythonExe -c "import platform,sys; print(sys.version); print(platform.machine()); assert platform.machine().upper() in ('ARM64','AARCH64'); assert sys.version_info[:2] in ((3,12),(3,13))"
 
 Write-Host "[2/9] Checking build prerequisites"
-foreach ($command in @("git", "cmake")) {
-    if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-        throw "Required command not found: $command"
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "Required command not found: git"
+}
+
+function Resolve-ArmPLDir {
+    param([string]$RequestedPath)
+
+    $candidates = @()
+
+    if ($RequestedPath) {
+        $candidates += $RequestedPath
     }
+
+    foreach ($scope in @("Process", "User", "Machine")) {
+        $value = [Environment]::GetEnvironmentVariable("ARMPL_DIR", $scope)
+        if ($value) {
+            $candidates += $value
+        }
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if ((Test-Path (Join-Path $candidate "include_lp64")) -and
+            (Test-Path (Join-Path $candidate "lib"))) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    $root = Join-Path $env:ProgramFiles "Arm Performance Libraries"
+    if (Test-Path $root) {
+        $found = Get-ChildItem -Path $root -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object {
+                (Test-Path (Join-Path $_.FullName "include_lp64")) -and
+                (Test-Path (Join-Path $_.FullName "lib"))
+            } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+
+        if ($found) {
+            return $found.FullName
+        }
+    }
+
+    return $null
+}
+
+$ArmPLDir = Resolve-ArmPLDir $ArmPLDir
+
+if (-not $ArmPLDir) {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "Arm Performance Libraries is not installed and winget is unavailable."
+    }
+
+    Write-Host "Arm Performance Libraries not found. Installing with winget..."
+    & winget install --id Arm.ArmPerformanceLibraries --exact --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        throw "Arm Performance Libraries winget installation failed."
+    }
+
+    $ArmPLDir = Resolve-ArmPLDir $null
 }
 
 if (-not $ArmPLDir) {
-    throw "ARMPL_DIR is not set. Install Arm Performance Libraries for Windows first, then reopen PowerShell."
+    throw "Arm Performance Libraries installed, but ARMPL_DIR could not be resolved."
 }
-if (-not (Test-Path $ArmPLDir)) {
-    throw "ARMPL_DIR does not exist: $ArmPLDir"
-}
+
 $env:ARMPL_DIR = $ArmPLDir
+$armplBin = Join-Path $ArmPLDir "bin"
+if ((Test-Path $armplBin) -and (($env:Path -split ";") -notcontains $armplBin)) {
+    $env:Path = "$armplBin;$env:Path"
+}
+
 Write-Host "ARMPL_DIR=$ArmPLDir"
 
 Write-Host "[3/9] Loading Visual Studio ARM64 native compiler environment"
