@@ -9,6 +9,7 @@ import time
 import numpy as np
 import onnx
 import onnxruntime as ort
+import onnxruntime_qnn as qnn_ep
 import torch
 import yaml
 from ml_collections import ConfigDict
@@ -84,42 +85,44 @@ def make_frames_static(source: Path, destination: Path, frames: int) -> None:
 
 def create_qnn_session(model_path: Path):
     print("[3/5] Compiling model for Snapdragon NPU (QNN HTP)")
-    providers = ort.get_available_providers()
-    print(f"available_providers={providers}")
-    if "QNNExecutionProvider" not in providers:
-        raise RuntimeError(
-            "QNNExecutionProvider is unavailable. Run "
-            "scripts/install-qnn-arm64.ps1 first."
-        )
+
+    ep_name = "QNNExecutionProvider"
+    ep_lib_path = qnn_ep.get_library_path()
+    htp_path = qnn_ep.get_qnn_htp_path()
+
+    print(f"qnn_plugin={ep_lib_path}")
+    print(f"qnn_htp={htp_path}")
+
+    ort.register_execution_provider_library(ep_name, ep_lib_path)
+    devices = ort.get_ep_devices()
+    qnn_devices = [device for device in devices if device.ep_name == ep_name]
+    print(f"qnn_devices={qnn_devices}")
+
+    if not qnn_devices:
+        raise RuntimeError("QNN plugin registered, but no QNN EP device was found.")
 
     options = ort.SessionOptions()
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
     options.intra_op_num_threads = 1
     options.inter_op_num_threads = 1
-
-    # Make this a real NPU test: unsupported nodes must fail instead of silently
-    # running on CPU.
     options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
 
-    provider_options = {
-        "backend_type": "htp",
+    ep_options = {
+        "backend_path": htp_path,
         "htp_performance_mode": "burst",
         "htp_graph_finalization_optimization_mode": "3",
-        "enable_htp_fp16_precision": "1",
-        "offload_graph_io_quantization": "0",
     }
+    options.add_provider_for_devices(qnn_devices, ep_options)
 
     started = time.perf_counter()
     session = ort.InferenceSession(
         str(model_path),
         sess_options=options,
-        providers=["QNNExecutionProvider"],
-        provider_options=[provider_options],
     )
     elapsed = time.perf_counter() - started
+
     print(f"qnn_session_create={elapsed:.3f}s")
-    print(f"session_providers={session.get_providers()}")
-    return session
+    return session, ep_name
 
 
 def main() -> None:
@@ -159,7 +162,7 @@ def main() -> None:
     else:
         print(f"[2/5] Reusing static ONNX: {static_path}")
 
-    session = create_qnn_session(static_path)
+    session, qnn_ep_name = create_qnn_session(static_path)
 
     print("[4/5] Running NPU inference")
     input_channels = int(config.audio.num_channels) * 2
@@ -182,6 +185,9 @@ def main() -> None:
     print(f"output_shape={output.shape}")
     print(f"best={min(times):.3f}s")
     print(f"average={sum(times) / len(times):.3f}s")
+
+    del session
+    ort.unregister_execution_provider_library(qnn_ep_name)
 
 
 if __name__ == "__main__":
