@@ -1,5 +1,5 @@
 import audioread
-import librosa
+from .optional_deps import librosa
 import numpy as np
 import soundfile as sf
 import math
