@@ -700,6 +700,25 @@ class SeperateMDXC(SeperateAttributes):
     def _create_mdx23c_arm64_ort_session(self, mdx_segment_size):
         onnx_path = self._mdx23c_arm64_onnx_path(mdx_segment_size)
 
+        if os.path.isfile(onnx_path):
+            try:
+                cache_check_options = ort.SessionOptions()
+                cache_check_options.graph_optimization_level = (
+                    ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+                )
+                ort.InferenceSession(
+                    onnx_path,
+                    sess_options=cache_check_options,
+                    providers=["CPUExecutionProvider"],
+                )
+            except Exception as exc:
+                print(
+                    f"[ARM64 ORT] Invalid cache removed: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                os.remove(onnx_path)
+
         if not os.path.isfile(onnx_path):
             print(
                 f"[ARM64 ORT] Exporting MDX23C core once: {os.path.basename(onnx_path)}",
