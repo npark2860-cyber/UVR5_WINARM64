@@ -192,10 +192,13 @@ class TFC_TDF_net(nn.Module):
         x = x.reshape(b, c // k, f * k, t)
         return x
 
-    def forward(self, x):
+    def forward_spectrogram(self, x):
+        """Run the MDX23C neural network on a real/imag spectrogram tensor.
 
-        x = self.stft(x)
-
+        Input layout matches STFT.__call__: [batch, channels*2, freq, frames].
+        This split lets Windows ARM64 use ONNX Runtime for the expensive neural
+        network while keeping STFT/ISTFT outside the exported graph.
+        """
         mix = x = self.cac2cws(x)
 
         first_conv_out = x = self.first_conv(x)
@@ -227,8 +230,12 @@ class TFC_TDF_net(nn.Module):
             b, c, f, t = x.shape
             x = x.reshape(b, self.num_target_instruments, -1, f, t)
 
-        x = self.stft.inverse(x)
+        return x
 
+    def forward(self, x):
+        x = self.stft(x)
+        x = self.forward_spectrogram(x)
+        x = self.stft.inverse(x)
         return x
 
 
