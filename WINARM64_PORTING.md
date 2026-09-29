@@ -44,6 +44,12 @@ Phase 2 must replace the required librosa subset with ARM64-native primitives
 or validate another compatible implementation before processing parity is
 claimed.
 
+### Python 3.13 audioop
+
+Python 3.13 removed the stdlib `audioop` module used by pydub. The native
+bootstrap installs `audioop-lts==0.2.2` on Python 3.13+, which provides a
+Windows ARM64 wheel and restores the `audioop` import expected by pydub.
+
 ### TkDND
 
 The repository contains only the x64 Windows tkdnd binary. Native Windows ARM64

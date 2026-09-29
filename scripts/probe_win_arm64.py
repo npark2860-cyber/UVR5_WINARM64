@@ -34,6 +34,10 @@ for name in modules:
     version = getattr(module, "__version__", "stdlib")
     print(f"PASS import {name}: {version}")
 
+if sys.version_info >= (3, 13):
+    import audioop
+    print("PASS import audioop compatibility module")
+
 import torch
 if torch.cuda.is_available():
     print("INFO: CUDA is available")
