@@ -35,4 +35,10 @@ if torch.cuda.is_available():
 else:
     print("INFO: CPU backend active")
 
+uvr = importlib.import_module("UVR")
+print("PASS import UVR module")
+if getattr(uvr, "is_dnd_compatible", True):
+    raise SystemExit("FAIL: x64 TkDND must be disabled on native Windows ARM64")
+print("PASS: x64 TkDND disabled for native ARM64")
+
 print("PASS: Windows ARM64 bootstrap imports")
