@@ -18,7 +18,7 @@
 # are not required to reach the native GUI bootstrap milestone.
 
 altgraph==0.17.3
-audioread==3.0.0
+audioread==3.0.1
 certifi
 cffi==2.1.1
 einops==0.6.0
