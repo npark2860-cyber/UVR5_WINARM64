@@ -712,32 +712,72 @@ class SeperateMDXC(SeperateAttributes):
             wrapper = TFC_TDF_Core(export_model).eval()
 
             input_channels = int(self.mdx_c_configs.audio.num_channels) * 2
+
+            # Export with a short time axis. The MDX23C core is fully
+            # convolutional along time, so the ONNX model can keep this axis
+            # dynamic and later accept the real 256-frame UVR input. This
+            # makes first-run export dramatically lighter.
+            export_frames = 32
+            scale_divisor = 2 ** int(self.mdx_c_configs.model.num_scales)
+            if export_frames % scale_divisor:
+                export_frames = scale_divisor * 2
+
             dummy = torch.zeros(
                 1,
                 input_channels,
                 int(self.mdx_c_configs.audio.dim_f),
-                int(mdx_segment_size),
+                export_frames,
                 dtype=torch.float32,
             )
 
-            export_started = time.perf_counter()
-            torch.onnx.export(
-                wrapper,
-                dummy,
-                onnx_path,
-                input_names=["spectrogram"],
-                output_names=["estimated_spectrogram"],
-                dynamic_axes={
-                    "spectrogram": {0: "batch"},
-                    "estimated_spectrogram": {0: "batch"},
-                },
-                opset_version=17,
-                do_constant_folding=True,
-                dynamo=False,
+            output_time_axis = (
+                4 if export_model.num_target_instruments > 1 else 3
             )
+            temp_onnx_path = f"{onnx_path}.tmp"
+            if os.path.isfile(temp_onnx_path):
+                os.remove(temp_onnx_path)
+
+            export_started = time.perf_counter()
+            try:
+                torch.onnx.export(
+                    wrapper,
+                    dummy,
+                    temp_onnx_path,
+                    input_names=["spectrogram"],
+                    output_names=["estimated_spectrogram"],
+                    dynamic_axes={
+                        "spectrogram": {0: "batch", 3: "frames"},
+                        "estimated_spectrogram": {
+                            0: "batch",
+                            output_time_axis: "frames",
+                        },
+                    },
+                    opset_version=17,
+                    do_constant_folding=True,
+                    dynamo=False,
+                )
+
+                # Validate before replacing the cache. Interrupted/failed
+                # exports can therefore never leave a corrupt cache behind.
+                validation_options = ort.SessionOptions()
+                validation_options.graph_optimization_level = (
+                    ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+                )
+                ort.InferenceSession(
+                    temp_onnx_path,
+                    sess_options=validation_options,
+                    providers=["CPUExecutionProvider"],
+                )
+                os.replace(temp_onnx_path, onnx_path)
+            except Exception:
+                if os.path.isfile(temp_onnx_path):
+                    os.remove(temp_onnx_path)
+                raise
+
             print(
                 f"[ARM64 ORT] Export DONE elapsed="
-                f"{time.perf_counter() - export_started:.3f}s",
+                f"{time.perf_counter() - export_started:.3f}s "
+                f"export_frames={export_frames}",
                 flush=True,
             )
 
