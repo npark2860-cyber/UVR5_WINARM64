@@ -35,7 +35,13 @@ from gui_data.constants import *
 from gui_data.app_size_values import *
 from gui_data.error_handling import error_text, error_dialouge
 from gui_data.old_data_check import file_check, remove_unneeded_yamls, remove_temps
-from gui_data.tkinterdnd2 import TkinterDnD, DND_FILES
+if IS_WINDOWS_ARM64:
+    # The bundled Windows TkDND binary is x64-only, and Python 3.13 no longer
+    # exposes tkinter.tix. Native Windows ARM64 runs without drag and drop.
+    TkinterDnD = None
+    DND_FILES = "DND_Files"
+else:
+    from gui_data.tkinterdnd2 import TkinterDnD, DND_FILES
 from lib_v5.vr_network.model_param_init import ModelParameters
 from kthread import KThread
 from lib_v5 import spec_utils
