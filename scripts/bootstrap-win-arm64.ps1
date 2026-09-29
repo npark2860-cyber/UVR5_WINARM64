@@ -7,21 +7,15 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
-function Run-Python {
-    param([string[]]$Args)
-    & $PythonExe @Args
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python command failed: $PythonExe $($Args -join ' ')"
-    }
-}
-
 Write-Host "[1/6] Checking host Python architecture"
-Run-Python @("-c", "import platform,sys; print(sys.version); print(platform.machine()); assert platform.machine().upper() in ('ARM64','AARCH64'), 'Native ARM64 Python required'")
+& $PythonExe -c "import platform,sys; print(sys.version); print(platform.machine()); assert platform.machine().upper() in ('ARM64','AARCH64'), 'Native ARM64 Python required'"
+if ($LASTEXITCODE -ne 0) { throw "Native ARM64 Python is required" }
 
 $Venv = Join-Path $RepoRoot ".venv-arm64"
 if (-not (Test-Path $Venv)) {
     Write-Host "[2/6] Creating ARM64 virtual environment"
-    Run-Python @("-m", "venv", $Venv)
+    & $PythonExe -m venv $Venv
+    if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
 } else {
     Write-Host "[2/6] Reusing $Venv"
 }
