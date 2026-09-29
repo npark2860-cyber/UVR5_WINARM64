@@ -834,13 +834,23 @@ class SeperateMDXC(SeperateAttributes):
 
         return session
 
-    def _mdx23c_arm64_qnn_path(self, mdx_segment_size):
+    def _mdx23c_arm64_qnn_path(self, mdx_segment_size, batch_size=1):
         model_root, _ = os.path.splitext(self.model_path)
-        return f"{model_root}.winarm64_qnn_b1_t{mdx_segment_size}.onnx"
+        return (
+            f"{model_root}.winarm64_qnn_b{int(batch_size)}_"
+            f"t{mdx_segment_size}.onnx"
+        )
 
-    def _ensure_mdx23c_arm64_qnn_model(self, mdx_segment_size):
+    def _ensure_mdx23c_arm64_qnn_model(
+        self,
+        mdx_segment_size,
+        batch_size=1,
+    ):
         dynamic_path = self._mdx23c_arm64_onnx_path(mdx_segment_size)
-        static_path = self._mdx23c_arm64_qnn_path(mdx_segment_size)
+        static_path = self._mdx23c_arm64_qnn_path(
+            mdx_segment_size,
+            batch_size,
+        )
 
         # Reuse the already-tested CPU ORT builder to guarantee the real
         # checkpoint has a valid dynamic ONNX cache.
@@ -882,7 +892,7 @@ class SeperateMDXC(SeperateAttributes):
                 for dim in tensor_type.shape.dim:
                     if dim.HasField("dim_param"):
                         if dim.dim_param == "batch":
-                            dim.dim_value = 1
+                            dim.dim_value = int(batch_size)
                             replacements += 1
                         elif dim.dim_param == "frames":
                             dim.dim_value = int(mdx_segment_size)
@@ -914,25 +924,44 @@ class SeperateMDXC(SeperateAttributes):
 
         return static_path
 
-    def _mdx23c_arm64_qnn_context_path(self, mdx_segment_size):
-        static_path = self._mdx23c_arm64_qnn_path(mdx_segment_size)
+    def _mdx23c_arm64_qnn_context_path(
+        self,
+        mdx_segment_size,
+        batch_size=1,
+    ):
+        static_path = self._mdx23c_arm64_qnn_path(
+            mdx_segment_size,
+            batch_size,
+        )
         root, _ = os.path.splitext(static_path)
         return f"{root}.ctx.onnx"
 
-    def _create_mdx23c_arm64_qnn_session(self, mdx_segment_size):
+    def _create_mdx23c_arm64_qnn_session(
+        self,
+        mdx_segment_size,
+        preferred_batch_size=4,
+    ):
         import onnxruntime_qnn as qnn_ep
 
-        # Never compile inside the UVR GUI process. If a precompiled QNN
-        # context is not ready, fall back to CPU ORT instead of freezing the UI.
-        self._ensure_mdx23c_arm64_qnn_model(mdx_segment_size)
-        context_path = self._mdx23c_arm64_qnn_context_path(
-            mdx_segment_size
-        )
+        candidate_batch_sizes = []
+        for candidate in (preferred_batch_size, 1):
+            candidate = int(candidate)
+            if candidate not in candidate_batch_sizes:
+                candidate_batch_sizes.append(candidate)
 
-        if not os.path.isfile(context_path):
+        available_contexts = []
+        for candidate in candidate_batch_sizes:
+            context_path = self._mdx23c_arm64_qnn_context_path(
+                mdx_segment_size,
+                candidate,
+            )
+            if os.path.isfile(context_path):
+                available_contexts.append((candidate, context_path))
+
+        if not available_contexts:
             raise RuntimeError(
                 "QNN context cache is not prepared. Run "
-                "scripts\\prepare-mdx23c-qnn-context.ps1 first."
+                "scripts\\prepare-mdx23c-qnn-context.ps1 -BatchSize 4 first."
             )
 
         ep_name = "QNNExecutionProvider"
@@ -958,41 +987,62 @@ class SeperateMDXC(SeperateAttributes):
                 "QNN plugin registered but no Snapdragon QNN device was found."
             )
 
-        options = ort.SessionOptions()
-        options.graph_optimization_level = (
-            ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
-        )
-        options.intra_op_num_threads = 1
-        options.inter_op_num_threads = 1
-        options.add_session_config_entry(
-            "session.disable_cpu_ep_fallback",
-            "1",
-        )
-        options.add_provider_for_devices(
-            qnn_devices,
-            {
-                "backend_path": qnn_ep.get_qnn_htp_path(),
-                "htp_performance_mode": "burst",
-            },
-        )
+        last_error = None
+        for qnn_batch_size, context_path in available_contexts:
+            options = ort.SessionOptions()
+            options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            )
+            options.intra_op_num_threads = 1
+            options.inter_op_num_threads = 1
+            options.add_session_config_entry(
+                "session.disable_cpu_ep_fallback",
+                "1",
+            )
+            options.add_provider_for_devices(
+                qnn_devices,
+                {
+                    "backend_path": qnn_ep.get_qnn_htp_path(),
+                    "htp_performance_mode": (
+                        "sustained_high_performance"
+                    ),
+                },
+            )
 
-        print(
-            f"[ARM64 QNN] Loading precompiled NPU context: "
-            f"{os.path.basename(context_path)}",
-            flush=True,
-        )
-        session_started = time.perf_counter()
-        session = ort.InferenceSession(
-            context_path,
-            sess_options=options,
-        )
-        print(
-            f"[ARM64 QNN] NPU context loaded elapsed="
-            f"{time.perf_counter() - session_started:.3f}s",
-            flush=True,
-        )
+            print(
+                f"[ARM64 QNN] Loading precompiled NPU context: "
+                f"{os.path.basename(context_path)} "
+                f"batch={qnn_batch_size} "
+                f"perf=sustained_high_performance",
+                flush=True,
+            )
+            session_started = time.perf_counter()
+            try:
+                session = ort.InferenceSession(
+                    context_path,
+                    sess_options=options,
+                )
+            except Exception as exc:
+                last_error = exc
+                print(
+                    f"[ARM64 QNN] Context load failed for "
+                    f"batch={qnn_batch_size}: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                continue
 
-        return session
+            print(
+                f"[ARM64 QNN] NPU context loaded elapsed="
+                f"{time.perf_counter() - session_started:.3f}s "
+                f"batch={qnn_batch_size}",
+                flush=True,
+            )
+            return session, qnn_batch_size
+
+        raise RuntimeError(
+            f"No usable QNN context cache: {last_error}"
+        )
 
     def demix(self, mix):
         sr_pitched = 441000
@@ -1014,6 +1064,7 @@ class SeperateMDXC(SeperateAttributes):
             and str(self.device).startswith("cpu")
         )
         use_arm64_qnn = False
+        qnn_batch_size = 1
 
         model = None
         ort_session = None
@@ -1032,8 +1083,12 @@ class SeperateMDXC(SeperateAttributes):
             )
 
             try:
-                ort_session = self._create_mdx23c_arm64_qnn_session(
-                    mdx_segment_size
+                (
+                    ort_session,
+                    qnn_batch_size,
+                ) = self._create_mdx23c_arm64_qnn_session(
+                    mdx_segment_size,
+                    preferred_batch_size=4,
                 )
                 use_arm64_qnn = True
                 print(
@@ -1069,7 +1124,11 @@ class SeperateMDXC(SeperateAttributes):
                     )
                     use_arm64_ort = False
 
-        batch_size = 1 if use_arm64_qnn else self.mdx_batch_size
+        batch_size = (
+            qnn_batch_size
+            if use_arm64_qnn
+            else self.mdx_batch_size
+        )
 
         if not use_arm64_ort:
             model = TFC_TDF_net(self.mdx_c_configs).eval().to(self.device)
@@ -1131,8 +1190,8 @@ class SeperateMDXC(SeperateAttributes):
             #
             # QNN remains single-batch/serial, but it no longer waits for the
             # previous ISTFT before receiving the next prepared spectrogram.
-            prefetch_depth = min(4, len(batches))
-            postprocess_depth = 4
+            prefetch_depth = min(2, len(batches))
+            postprocess_depth = 2
 
             print(
                 f"[ARM64 QNN] Pipeline enabled "
@@ -1142,9 +1201,31 @@ class SeperateMDXC(SeperateAttributes):
 
             def prepare_spectrogram(batch_tensor):
                 with torch.no_grad():
+                    actual_count = int(batch_tensor.shape[0])
+
+                    if actual_count < qnn_batch_size:
+                        pad_shape = (
+                            qnn_batch_size - actual_count,
+                            *batch_tensor.shape[1:],
+                        )
+                        batch_tensor = torch.cat(
+                            [
+                                batch_tensor,
+                                torch.zeros(
+                                    pad_shape,
+                                    dtype=batch_tensor.dtype,
+                                    device=batch_tensor.device,
+                                ),
+                            ],
+                            dim=0,
+                        )
+
                     spectrogram = stft_helper(batch_tensor)
-                    return np.ascontiguousarray(
-                        spectrogram.cpu().numpy()
+                    return (
+                        np.ascontiguousarray(
+                            spectrogram.cpu().numpy()
+                        ),
+                        actual_count,
                     )
 
             def restore_waveform(estimated_spec_array):
@@ -1180,7 +1261,10 @@ class SeperateMDXC(SeperateAttributes):
                     batch_index = batch_zero_index + 1
                     self.running_inference_progress_bar(len(batches))
 
-                    spectrogram_np = pre_futures.pop(
+                    (
+                        spectrogram_np,
+                        actual_count,
+                    ) = pre_futures.pop(
                         batch_zero_index
                     ).result()
 
@@ -1202,6 +1286,7 @@ class SeperateMDXC(SeperateAttributes):
                             f"backend=QNN-NPU model={self.model_basename} "
                             f"device={self.device} "
                             f"shape={tuple(batches[batch_zero_index].shape)} "
+                            f"qnn_batch={qnn_batch_size} "
                             f"batches={len(batches)} "
                             f"torch_threads={torch.get_num_threads()}",
                             flush=True,
@@ -1224,6 +1309,7 @@ class SeperateMDXC(SeperateAttributes):
                     post_futures.append(
                         (
                             batch_zero_index,
+                            actual_count,
                             post_executor.submit(
                                 restore_waveform,
                                 estimated_spec_np,
@@ -1235,11 +1321,15 @@ class SeperateMDXC(SeperateAttributes):
                     # the NPU busy for ~0.8 s, the oldest ISTFT should normally
                     # already be complete by the time we drain it.
                     if len(post_futures) >= postprocess_depth:
-                        _, finished = post_futures.pop(0)
-                        append_batch_output(finished.result())
+                        _, finished_count, finished = post_futures.pop(0)
+                        append_batch_output(
+                            finished.result()[:finished_count]
+                        )
 
-                for _, finished in post_futures:
-                    append_batch_output(finished.result())
+                for _, finished_count, finished in post_futures:
+                    append_batch_output(
+                        finished.result()[:finished_count]
+                    )
 
         else:
             with torch.no_grad():
