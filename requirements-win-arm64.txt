@@ -12,7 +12,7 @@
 #   pytorch-lightning
 #   opencv-python
 #   samplerate
-#   Dora
+#   Dora / diffq
 #
 # Those packages either have no suitable CPython 3.12 Windows ARM64 wheel or
 # are not required to reach the native GUI bootstrap milestone.
@@ -21,7 +21,6 @@ altgraph==0.17.3
 audioread==3.0.0
 certifi
 cffi==2.1.1
-diffq==0.2.3
 einops==0.6.0
 future==0.18.2
 julius==0.2.7
