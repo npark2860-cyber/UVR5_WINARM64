@@ -1,11 +1,10 @@
 import audioread
-import librosa
+from .optional_deps import librosa
 import numpy as np
 import soundfile as sf
 import math
 import platform
 import traceback
-from . import pyrb
 from scipy.signal import correlate, hilbert
 import io
 
@@ -27,11 +26,6 @@ MAXIMUM_P = "Shifts: Maximum"
 progress_value = 0
 last_update_time = 0
 is_macos = False
-
-if OPERATING_SYSTEM == 'Windows':
-    from pyrubberband import pyrb
-else:
-    from . import pyrb
 
 if OPERATING_SYSTEM == 'Darwin':
     wav_resolution = "polyphase" if SYSTEM_PROC == ARM or ARM in SYSTEM_ARCH else "sinc_fastest" 
@@ -729,6 +723,8 @@ def augment_audio(export_path, audio_file, rate, is_normalization, wav_type_set,
     if not is_time_correction:
         wav_mix = change_pitch_semitones(wav, 44100, semitone_shift=-rate)[0]
     else:
+        from . import pyrb
+
         if is_pitch:
             wav_1 = pyrb.pitch_shift(wav[0], sr, rate, rbargs=None)
             wav_2 = pyrb.pitch_shift(wav[1], sr, rate, rbargs=None)

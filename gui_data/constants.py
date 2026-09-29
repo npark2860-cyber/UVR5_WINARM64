@@ -4,7 +4,9 @@ import platform
 OPERATING_SYSTEM = platform.system()
 SYSTEM_ARCH = platform.platform()
 SYSTEM_PROC = platform.processor()
+SYSTEM_MACHINE = platform.machine().lower()
 ARM = 'arm'
+IS_WINDOWS_ARM64 = OPERATING_SYSTEM == "Windows" and SYSTEM_MACHINE in ("arm64", "aarch64")
 
 #MAIN_FONT_NAME = "Century Gothic"
 OPT_SEPARATOR_SAVE = '—'*25

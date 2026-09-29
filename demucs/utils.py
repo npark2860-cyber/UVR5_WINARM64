@@ -24,7 +24,7 @@ import warnings
 import zlib
 import tkinter as tk
 
-from diffq import UniformQuantizer, DiffQuantizer
+from .diffq_compat import UniformQuantizer, DiffQuantizer
 import torch as th
 import tqdm
 from torch import distributed

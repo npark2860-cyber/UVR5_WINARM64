@@ -16,7 +16,7 @@ from pathlib import Path
 import warnings
 
 from omegaconf import OmegaConf
-from diffq import DiffQuantizer, UniformQuantizer, restore_quantized_state
+from .diffq_compat import DiffQuantizer, UniformQuantizer, restore_quantized_state
 import torch
 
 

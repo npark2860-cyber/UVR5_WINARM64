@@ -1,0 +1,104 @@
+# Windows ARM64 Port - Phase 1 Bootstrap
+
+## Source of truth
+
+- Repository: `npark2860-cyber/UVR5_WINARM64`
+- Upstream baseline commit: `ad64d7f4c000ed4b62e17c82790039dd290ffb4f`
+- Upstream UVR version: `v5.6.0`
+- Port branch: `exp/win-arm64-bootstrap`
+
+The `main` branch remains the untouched baseline.
+
+## Phase 1 goal
+
+Start the UVR 5.6 GUI under **native CPython 3.12 or 3.13 Windows ARM64**
+without Prism/x64 emulation.
+
+This phase does not claim full processing parity. It establishes the native
+runtime and identifies the next real blockers with minimal source changes.
+
+## Architecture-sensitive packages selected
+
+- PyTorch: `2.14.0+cpu`, official Windows ARM64 CPU wheel
+- NumPy: `2.3.5`, Windows ARM64 wheel
+- SciPy: `1.16.3`, Windows ARM64 wheel
+- ONNX: `1.23.0`, Windows ARM64 wheel
+- ONNX Runtime: `1.30.0`, Windows ARM64 wheel
+- SoundFile: `0.14.0`, Windows ARM64 wheel
+- Pillow: `12.1.1`, Windows ARM64 wheel
+- psutil: `7.2.2`, Windows ARM64 wheel
+- PyYAML: `6.0.3`, Windows ARM64 wheel
+- cffi: `2.1.1`, Windows ARM64 wheel
+
+CI validates the native binary package set for both CPython 3.12 (`cp312`)
+and CPython 3.13 (`cp313`) Windows ARM64.
+
+## Dependencies intentionally deferred
+
+### librosa compatibility layer
+
+Native Windows ARM64 uses `lib_v5/librosa_compat.py` instead of importing
+librosa/numba/llvmlite. UVR 5.6 only needs five librosa operations:
+`load`, `resample`, `stft`, `istft`, and `get_duration`.
+
+The compatibility layer implements those operations with NumPy, SciPy, and
+SoundFile. CI verifies a 48 kHz stereo WAV can be loaded/resampled to 44.1 kHz,
+and validates an STFT/ISTFT round-trip on Python 3.12 and 3.13.
+
+Non-Windows-ARM64 platforms keep the original librosa path.
+
+### Python 3.13 audioop
+
+Python 3.13 removed the stdlib `audioop` module used by pydub. The native
+bootstrap installs `audioop-lts==0.2.2` on Python 3.13+, which provides a
+Windows ARM64 wheel and restores the `audioop` import expected by pydub.
+
+### TkDND
+
+The repository contains only the x64 Windows tkdnd binary. Native Windows ARM64
+therefore disables drag and drop and falls back to ordinary Tk. File picker and
+manual path entry remain available.
+
+### cryptography / Matchering
+
+These are feature-specific and are lazy-loaded. They must not prevent the main
+GUI from starting.
+
+### onnx2pytorch
+
+Used at one processing path only and is lazy-loaded to avoid pulling additional
+startup dependencies.
+
+### diffq
+
+Demucs imports diffq at module load time, but the native bootstrap does not
+depend on it. The port routes those imports through `demucs/diffq_compat.py`.
+Non-quantized paths can load without diffq; a path that actually requires
+diffq fails explicitly instead of preventing GUI startup.
+
+### PyTorch Lightning
+
+`lib_v5/mdxnet.py` only used `LightningModule` as a base class and contains
+no Lightning training hooks. The ARM64 branch uses `torch.nn.Module`
+directly.
+
+## Bootstrap
+
+From native Windows ARM64 PowerShell:
+
+```powershell
+.\scripts\bootstrap-win-arm64.ps1 -Launch
+```
+
+The script rejects x64 Python and Python versions other than 3.12/3.13. A
+passing probe is therefore evidence that the Python runtime and core
+numerical/ML dependencies are actually native ARM64.
+
+## Phase 1 PASS condition
+
+1. Probe prints `Machine: ARM64` or `AARCH64`.
+2. Core imports pass.
+3. `UVR.py` opens the GUI.
+4. No x64 Python/PyTorch/ONNX Runtime process is involved.
+
+Processing-model validation belongs to Phase 2.
