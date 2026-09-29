@@ -939,7 +939,7 @@ class SeperateMDXC(SeperateAttributes):
     def _create_mdx23c_arm64_qnn_session(
         self,
         mdx_segment_size,
-        preferred_batch_size=4,
+        preferred_batch_size=2,
     ):
         import onnxruntime_qnn as qnn_ep
 
@@ -1031,6 +1031,11 @@ class SeperateMDXC(SeperateAttributes):
                     flush=True,
                 )
                 continue
+
+            try:
+                session.disable_fallback()
+            except Exception:
+                pass
 
             print(
                 f"[ARM64 QNN] NPU context loaded elapsed="
