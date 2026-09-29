@@ -130,7 +130,7 @@ def main() -> None:
             "*MDX23C-8KFFT-InstVoc_HQ*.winarm64_core_t256.onnx"
         ),
     )
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--frames", type=int, default=256)
     parser.add_argument(
         "--optimization-mode",
