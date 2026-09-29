@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
+from concurrent.futures import ThreadPoolExecutor
 from demucs.apply import apply_model, demucs_segments
 from demucs.hdemucs import HDemucs
 from demucs.model_v2 import auto_load_demucs_model_v2
@@ -1113,54 +1114,182 @@ class SeperateMDXC(SeperateAttributes):
         X = torch.zeros(S, 2, C - H) if S > 1 else torch.zeros(2, C - H)
         X = X.to(self.device)
 
-        with torch.no_grad():
-            for batch_index, batch in enumerate(batches, start=1):
-                self.running_inference_progress_bar(len(batches))
+        def append_batch_output(batch_output):
+            nonlocal X
+            for w in batch_output:
+                a = X[..., :-(C - H)]
+                b = X[..., -(C - H):] + w[..., :(C - H)]
+                c = w[..., (C - H):]
+                X = torch.cat([a, b, c], -1)
 
-                if batch_index == 1:
-                    first_batch_started = time.perf_counter()
-                    backend = ("QNN-NPU" if use_arm64_qnn else "ORT-CPU") if use_arm64_ort else "PyTorch"
-                    print(
-                        f"[ARM64 DIAG] MDX23C first batch START "
-                        f"backend={backend} model={self.model_basename} "
-                        f"device={self.device} shape={tuple(batch.shape)} "
-                        f"batches={len(batches)} "
-                        f"torch_threads={torch.get_num_threads()}",
-                        flush=True,
-                    )
+        if use_arm64_qnn:
+            # Pipeline CPU spectral work around serial NPU inference:
+            #
+            #   CPU STFT(N+1)  ─┐
+            #   NPU infer(N)    ├─ overlap
+            #   CPU ISTFT(N-1) ─┘
+            #
+            # QNN remains single-batch/serial, but it no longer waits for the
+            # previous ISTFT before receiving the next prepared spectrogram.
+            prefetch_depth = min(4, len(batches))
+            postprocess_depth = 4
 
-                if use_arm64_ort:
-                    spectrogram = stft_helper(batch)
-                    spectrogram_np = np.ascontiguousarray(
+            print(
+                f"[ARM64 QNN] Pipeline enabled "
+                f"prefetch={prefetch_depth} postprocess={postprocess_depth}",
+                flush=True,
+            )
+
+            def prepare_spectrogram(batch_tensor):
+                with torch.no_grad():
+                    spectrogram = stft_helper(batch_tensor)
+                    return np.ascontiguousarray(
                         spectrogram.cpu().numpy()
                     )
+
+            def restore_waveform(estimated_spec_array):
+                with torch.no_grad():
+                    estimated_spec = torch.from_numpy(
+                        estimated_spec_array
+                    ).to(self.device)
+                    return stft_helper.inverse(estimated_spec)
+
+            pre_futures = {}
+            post_futures = []
+            next_pre_submit = 0
+
+            with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="uvr-qnn-stft",
+            ) as pre_executor, ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="uvr-qnn-istft",
+            ) as post_executor:
+
+                while (
+                    next_pre_submit < len(batches)
+                    and len(pre_futures) < prefetch_depth
+                ):
+                    pre_futures[next_pre_submit] = pre_executor.submit(
+                        prepare_spectrogram,
+                        batches[next_pre_submit],
+                    )
+                    next_pre_submit += 1
+
+                for batch_zero_index in range(len(batches)):
+                    batch_index = batch_zero_index + 1
+                    self.running_inference_progress_bar(len(batches))
+
+                    spectrogram_np = pre_futures.pop(
+                        batch_zero_index
+                    ).result()
+
+                    while (
+                        next_pre_submit < len(batches)
+                        and len(pre_futures) < prefetch_depth
+                    ):
+                        pre_futures[next_pre_submit] = pre_executor.submit(
+                            prepare_spectrogram,
+                            batches[next_pre_submit],
+                        )
+                        next_pre_submit += 1
+
+                    npu_started = time.perf_counter()
+
+                    if batch_index == 1:
+                        print(
+                            f"[ARM64 DIAG] MDX23C first batch START "
+                            f"backend=QNN-NPU model={self.model_basename} "
+                            f"device={self.device} "
+                            f"shape={tuple(batches[batch_zero_index].shape)} "
+                            f"batches={len(batches)} "
+                            f"torch_threads={torch.get_num_threads()}",
+                            flush=True,
+                        )
+
                     estimated_spec_np = ort_session.run(
                         None,
                         {"spectrogram": spectrogram_np},
                     )[0]
-                    estimated_spec = torch.from_numpy(
-                        estimated_spec_np
-                    ).to(self.device)
-                    x = stft_helper.inverse(estimated_spec)
-                else:
-                    x = model(batch)
 
-                if batch_index == 1:
-                    first_batch_elapsed = (
-                        time.perf_counter() - first_batch_started
-                    )
-                    print(
-                        f"[ARM64 DIAG] MDX23C first batch DONE "
-                        f"backend={('QNN-NPU' if use_arm64_qnn else 'ORT-CPU') if use_arm64_ort else 'PyTorch'} "
-                        f"elapsed={first_batch_elapsed:.3f}s",
-                        flush=True,
+                    npu_elapsed = time.perf_counter() - npu_started
+
+                    if batch_index == 1:
+                        print(
+                            f"[ARM64 DIAG] MDX23C first batch DONE "
+                            f"backend=QNN-NPU npu_elapsed={npu_elapsed:.3f}s",
+                            flush=True,
+                        )
+
+                    post_futures.append(
+                        (
+                            batch_zero_index,
+                            post_executor.submit(
+                                restore_waveform,
+                                estimated_spec_np,
+                            ),
+                        )
                     )
 
-                for w in x:
-                    a = X[..., :-(C - H)]
-                    b = X[..., -(C - H):] + w[..., :(C - H)]
-                    c = w[..., (C - H):]
-                    X = torch.cat([a, b, c], -1)
+                    # Keep only a small bounded post-processing backlog. With
+                    # the NPU busy for ~0.8 s, the oldest ISTFT should normally
+                    # already be complete by the time we drain it.
+                    if len(post_futures) >= postprocess_depth:
+                        _, finished = post_futures.pop(0)
+                        append_batch_output(finished.result())
+
+                for _, finished in post_futures:
+                    append_batch_output(finished.result())
+
+        else:
+            with torch.no_grad():
+                for batch_index, batch in enumerate(batches, start=1):
+                    self.running_inference_progress_bar(len(batches))
+
+                    if batch_index == 1:
+                        first_batch_started = time.perf_counter()
+                        backend = (
+                            "ORT-CPU"
+                            if use_arm64_ort
+                            else "PyTorch"
+                        )
+                        print(
+                            f"[ARM64 DIAG] MDX23C first batch START "
+                            f"backend={backend} model={self.model_basename} "
+                            f"device={self.device} shape={tuple(batch.shape)} "
+                            f"batches={len(batches)} "
+                            f"torch_threads={torch.get_num_threads()}",
+                            flush=True,
+                        )
+
+                    if use_arm64_ort:
+                        spectrogram = stft_helper(batch)
+                        spectrogram_np = np.ascontiguousarray(
+                            spectrogram.cpu().numpy()
+                        )
+                        estimated_spec_np = ort_session.run(
+                            None,
+                            {"spectrogram": spectrogram_np},
+                        )[0]
+                        estimated_spec = torch.from_numpy(
+                            estimated_spec_np
+                        ).to(self.device)
+                        x = stft_helper.inverse(estimated_spec)
+                    else:
+                        x = model(batch)
+
+                    if batch_index == 1:
+                        first_batch_elapsed = (
+                            time.perf_counter() - first_batch_started
+                        )
+                        print(
+                            f"[ARM64 DIAG] MDX23C first batch DONE "
+                            f"backend={'ORT-CPU' if use_arm64_ort else 'PyTorch'} "
+                            f"elapsed={first_batch_elapsed:.3f}s",
+                            flush=True,
+                        )
+
+                    append_batch_output(x)
 
         estimated_sources = X[..., C - H:-(pad_size + C - H)] / N
 
