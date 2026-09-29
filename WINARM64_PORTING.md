@@ -59,6 +59,13 @@ GUI from starting.
 Used at one processing path only and is lazy-loaded to avoid pulling additional
 startup dependencies.
 
+### diffq
+
+Demucs imports diffq at module load time, but PyPI does not provide a CPython
+3.12 Windows ARM64 wheel. The port routes those imports through
+`demucs/diffq_compat.py`. Non-quantized paths can load without diffq; a path
+that actually requires diffq fails explicitly instead of preventing GUI startup.
+
 ### PyTorch Lightning
 
 `lib_v5/mdxnet.py` only used `LightningModule` as a base class and contains
