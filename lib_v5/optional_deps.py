@@ -1,15 +1,7 @@
-"""Lazy optional dependencies used by the Windows ARM64 bootstrap.
-
-The original UVR 5.6 source imports several packages at process start even though
-they are only needed by specific tools. Some of those packages do not currently
-ship a CPython 3.12 Windows ARM64 wheel. Keeping them lazy allows the native
-ARM64 GUI and supported inference backends to start without emulation.
-
-When an optional package becomes available, installing it is enough; callers do
-not need to change.
-"""
+"""Optional dependencies used by the Windows ARM64 port."""
 
 from importlib import import_module
+import platform
 
 
 class LazyModule:
@@ -26,7 +18,7 @@ class LazyModule:
                 raise RuntimeError(
                     f"{self._feature_name} requires optional dependency "
                     f"'{self._module_name}', which is not installed in the "
-                    "current Windows ARM64 bootstrap environment."
+                    "current Windows ARM64 environment."
                 ) from exc
         return self._module
 
@@ -37,5 +29,14 @@ class LazyModule:
         return dir(self._load())
 
 
-librosa = LazyModule("librosa", "Legacy librosa audio helpers")
+_is_windows_arm64 = (
+    platform.system() == "Windows"
+    and platform.machine().lower() in {"arm64", "aarch64"}
+)
+
+if _is_windows_arm64:
+    librosa = import_module("lib_v5.librosa_compat")
+else:
+    librosa = LazyModule("librosa", "Legacy librosa audio helpers")
+
 matchering = LazyModule("matchering", "Matchering")

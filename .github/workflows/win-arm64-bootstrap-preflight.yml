@@ -112,3 +112,20 @@ jobs:
             --abi ${{ matrix.abi }} \
             --index-url https://download.pytorch.org/whl/cpu \
             "torch==2.14.0+cpu"
+
+  audio-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install compatibility test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.3.5 scipy==1.16.3 soundfile==0.14.0
+      - name: Test 48kHz WAV and STFT compatibility
+        run: python scripts/test_librosa_compat.py

@@ -35,14 +35,17 @@ and CPython 3.13 (`cp313`) Windows ARM64.
 
 ## Dependencies intentionally deferred
 
-### librosa / numba / llvmlite
+### librosa compatibility layer
 
-UVR 5.6 uses librosa for loading, resampling, STFT and ISTFT. Phase 1
-lazy-loads librosa instead of importing it at process startup.
+Native Windows ARM64 uses `lib_v5/librosa_compat.py` instead of importing
+librosa/numba/llvmlite. UVR 5.6 only needs five librosa operations:
+`load`, `resample`, `stft`, `istft`, and `get_duration`.
 
-Phase 2 must replace the required librosa subset with ARM64-native primitives
-or validate another compatible implementation before processing parity is
-claimed.
+The compatibility layer implements those operations with NumPy, SciPy, and
+SoundFile. CI verifies a 48 kHz stereo WAV can be loaded/resampled to 44.1 kHz,
+and validates an STFT/ISTFT round-trip on Python 3.12 and 3.13.
+
+Non-Windows-ARM64 platforms keep the original librosa path.
 
 ### Python 3.13 audioop
 
