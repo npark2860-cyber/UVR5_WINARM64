@@ -19,6 +19,7 @@ import audioread
 import gzip
 from lib_v5.optional_deps import librosa
 import math
+import time
 import numpy as np
 import onnxruntime as ort
 import os
@@ -736,9 +737,29 @@ class SeperateMDXC(SeperateAttributes):
 
         #with torch.cuda.amp.autocast():
         with torch.no_grad():
-            for batch in batches:
+            for batch_index, batch in enumerate(batches, start=1):
                 self.running_inference_progress_bar(len(batches))
+
+                if batch_index == 1:
+                    first_batch_started = time.perf_counter()
+                    print(
+                        f"[ARM64 DIAG] MDX23C first batch START "
+                        f"model={self.model_basename} device={self.device} "
+                        f"shape={tuple(batch.shape)} batches={len(batches)} "
+                        f"torch_threads={torch.get_num_threads()}",
+                        flush=True,
+                    )
+
                 x = model(batch)
+
+                if batch_index == 1:
+                    first_batch_elapsed = time.perf_counter() - first_batch_started
+                    print(
+                        f"[ARM64 DIAG] MDX23C first batch DONE "
+                        f"elapsed={first_batch_elapsed:.3f}s",
+                        flush=True,
+                    )
+
                 for w in x:
                     a = X[..., :-(C - H)]
                     b = X[..., -(C - H):] + w[..., :(C - H)]
