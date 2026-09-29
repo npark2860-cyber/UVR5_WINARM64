@@ -1,0 +1,61 @@
+name: Windows ARM64 Bootstrap Preflight
+
+on:
+  push:
+    branches:
+      - exp/win-arm64-bootstrap
+  pull_request:
+    paths:
+      - "**/*.py"
+      - "requirements-win-arm64.txt"
+      - "scripts/bootstrap-win-arm64.ps1"
+      - ".github/workflows/win-arm64-bootstrap-preflight.yml"
+
+jobs:
+  python-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python sources
+        run: python -m compileall -q UVR.py separate.py demucs lib_v5 gui_data scripts
+
+  powershell-syntax:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse bootstrap script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/bootstrap-win-arm64.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+  arm64-wheel-resolution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve CPython 3.12 Windows ARM64 wheels
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip download \
+            --dest wheelhouse \
+            --only-binary=:all: \
+            --platform win_arm64 \
+            --python-version 3.12 \
+            --implementation cp \
+            --abi cp312 \
+            -r requirements-win-arm64.txt
