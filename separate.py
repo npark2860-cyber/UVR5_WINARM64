@@ -6,7 +6,7 @@ from demucs.model_v2 import auto_load_demucs_model_v2
 from demucs.pretrained import get_model as _gm
 from demucs.utils import apply_model_v1
 from demucs.utils import apply_model_v2
-from lib_v5.tfc_tdf_v3 import TFC_TDF_net, STFT
+from lib_v5.tfc_tdf_v3 import TFC_TDF_net, TFC_TDF_Core, STFT
 from lib_v5 import spec_utils
 from lib_v5.vr_network import nets
 from lib_v5.vr_network import nets_new
@@ -692,31 +692,158 @@ class SeperateMDXC(SeperateAttributes):
         if self.is_secondary_model or self.is_pre_proc_model:
             return secondary_sources
 
+    def _mdx23c_arm64_onnx_path(self, mdx_segment_size):
+        model_root, _ = os.path.splitext(self.model_path)
+        return f"{model_root}.winarm64_core_t{mdx_segment_size}.onnx"
+
+    def _create_mdx23c_arm64_ort_session(self, mdx_segment_size):
+        onnx_path = self._mdx23c_arm64_onnx_path(mdx_segment_size)
+
+        if not os.path.isfile(onnx_path):
+            print(
+                f"[ARM64 ORT] Exporting MDX23C core once: {os.path.basename(onnx_path)}",
+                flush=True,
+            )
+            self.write_to_console(" ARM64 ONNX export...")
+
+            export_model = TFC_TDF_net(self.mdx_c_configs).eval().to(cpu)
+            export_model.load_state_dict(torch.load(self.model_path, map_location=cpu))
+            wrapper = TFC_TDF_Core(export_model).eval()
+
+            input_channels = int(self.mdx_c_configs.audio.num_channels) * 2
+            dummy = torch.zeros(
+                1,
+                input_channels,
+                int(self.mdx_c_configs.audio.dim_f),
+                int(mdx_segment_size),
+                dtype=torch.float32,
+            )
+
+            export_started = time.perf_counter()
+            torch.onnx.export(
+                wrapper,
+                dummy,
+                onnx_path,
+                input_names=["spectrogram"],
+                output_names=["estimated_spectrogram"],
+                dynamic_axes={
+                    "spectrogram": {0: "batch"},
+                    "estimated_spectrogram": {0: "batch"},
+                },
+                opset_version=17,
+                do_constant_folding=True,
+                dynamo=False,
+            )
+            print(
+                f"[ARM64 ORT] Export DONE elapsed="
+                f"{time.perf_counter() - export_started:.3f}s",
+                flush=True,
+            )
+
+            del wrapper
+            del export_model
+            gc.collect()
+
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = max(1, torch.get_num_threads())
+        options.inter_op_num_threads = 1
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        session_started = time.perf_counter()
+        session = ort.InferenceSession(
+            onnx_path,
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+        print(
+            f"[ARM64 ORT] Session ready elapsed="
+            f"{time.perf_counter() - session_started:.3f}s "
+            f"threads={options.intra_op_num_threads}",
+            flush=True,
+        )
+
+        return session
+
     def demix(self, mix):
         sr_pitched = 441000
         org_mix = mix
         if self.is_pitch_change:
-            mix, sr_pitched = spec_utils.change_pitch_semitones(mix, 44100, semitone_shift=-self.semitone_shift)
-        
-        model = TFC_TDF_net(self.mdx_c_configs).eval().to(self.device)
-        model.load_state_dict(torch.load(self.model_path, map_location=self.device))
+            mix, sr_pitched = spec_utils.change_pitch_semitones(
+                mix,
+                44100,
+                semitone_shift=-self.semitone_shift,
+            )
+
+        mdx_segment_size = (
+            self.mdx_c_configs.inference.dim_t
+            if self.is_mdx_c_seg_def
+            else self.mdx_segment_size
+        )
+        batch_size = self.mdx_batch_size
+
+        use_arm64_ort = (
+            IS_WINDOWS_ARM64
+            and str(self.device).startswith("cpu")
+        )
+
+        model = None
+        ort_session = None
+        stft_helper = None
+
+        if use_arm64_ort:
+            try:
+                S = (
+                    1
+                    if self.mdx_c_configs.training.target_instrument
+                    else len(self.mdx_c_configs.training.instruments)
+                )
+                stft_helper = STFT(
+                    self.mdx_c_configs.audio.n_fft,
+                    self.mdx_c_configs.audio.hop_length,
+                    self.mdx_c_configs.audio.dim_f,
+                )
+                ort_session = self._create_mdx23c_arm64_ort_session(
+                    mdx_segment_size
+                )
+                print(
+                    f"[ARM64 ORT] MDX23C backend=ONNXRuntime "
+                    f"model={self.model_basename}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(
+                    f"[ARM64 ORT] Falling back to PyTorch: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                self.write_to_console(" ARM64 ONNX fallback -> PyTorch...")
+                use_arm64_ort = False
+
+        if not use_arm64_ort:
+            model = TFC_TDF_net(self.mdx_c_configs).eval().to(self.device)
+            model.load_state_dict(torch.load(self.model_path, map_location=self.device))
+
+            try:
+                S = model.num_target_instruments
+            except Exception:
+                S = model.module.num_target_instruments
+
         mix = torch.tensor(mix, dtype=torch.float32)
 
-        try:
-            S = model.num_target_instruments
-        except Exception as e:
-            S = model.module.num_target_instruments
-
-        mdx_segment_size = self.mdx_c_configs.inference.dim_t if self.is_mdx_c_seg_def else self.mdx_segment_size
-        
-        batch_size = self.mdx_batch_size
         C = self.mdx_c_configs.audio.hop_length * (mdx_segment_size - 1)
         N = self.overlap_mdx23
 
         H = C // N
         L = mix.shape[1]
         pad_size = H - (L - C) % H
-        mix = torch.cat([torch.zeros(2, C - H), mix, torch.zeros(2, pad_size + C - H)], 1)
+        mix = torch.cat(
+            [
+                torch.zeros(2, C - H),
+                mix,
+                torch.zeros(2, pad_size + C - H),
+            ],
+            1,
+        )
         mix = mix.to(self.device)
 
         chunks = []
@@ -730,32 +857,50 @@ class SeperateMDXC(SeperateAttributes):
         i = 0
         while i < len(chunks):
             batches.append(chunks[i:i + batch_size])
-            i = i + batch_size
+            i += batch_size
 
         X = torch.zeros(S, 2, C - H) if S > 1 else torch.zeros(2, C - H)
         X = X.to(self.device)
 
-        #with torch.cuda.amp.autocast():
         with torch.no_grad():
             for batch_index, batch in enumerate(batches, start=1):
                 self.running_inference_progress_bar(len(batches))
 
                 if batch_index == 1:
                     first_batch_started = time.perf_counter()
+                    backend = "ORT" if use_arm64_ort else "PyTorch"
                     print(
                         f"[ARM64 DIAG] MDX23C first batch START "
-                        f"model={self.model_basename} device={self.device} "
-                        f"shape={tuple(batch.shape)} batches={len(batches)} "
+                        f"backend={backend} model={self.model_basename} "
+                        f"device={self.device} shape={tuple(batch.shape)} "
+                        f"batches={len(batches)} "
                         f"torch_threads={torch.get_num_threads()}",
                         flush=True,
                     )
 
-                x = model(batch)
+                if use_arm64_ort:
+                    spectrogram = stft_helper(batch)
+                    spectrogram_np = np.ascontiguousarray(
+                        spectrogram.cpu().numpy()
+                    )
+                    estimated_spec_np = ort_session.run(
+                        None,
+                        {"spectrogram": spectrogram_np},
+                    )[0]
+                    estimated_spec = torch.from_numpy(
+                        estimated_spec_np
+                    ).to(self.device)
+                    x = stft_helper.inverse(estimated_spec)
+                else:
+                    x = model(batch)
 
                 if batch_index == 1:
-                    first_batch_elapsed = time.perf_counter() - first_batch_started
+                    first_batch_elapsed = (
+                        time.perf_counter() - first_batch_started
+                    )
                     print(
                         f"[ARM64 DIAG] MDX23C first batch DONE "
+                        f"backend={'ORT' if use_arm64_ort else 'PyTorch'} "
                         f"elapsed={first_batch_elapsed:.3f}s",
                         flush=True,
                     )
@@ -768,22 +913,43 @@ class SeperateMDXC(SeperateAttributes):
 
         estimated_sources = X[..., C - H:-(pad_size + C - H)] / N
 
-        pitch_fix = lambda s:self.pitch_fix(s, sr_pitched, org_mix)
+        pitch_fix = lambda source: self.pitch_fix(
+            source,
+            sr_pitched,
+            org_mix,
+        )
 
         if S > 1:
-            sources = {k: pitch_fix(v) if self.is_pitch_change else v for k, v in zip(self.mdx_c_configs.training.instruments, estimated_sources.cpu().detach().numpy())}
-            
+            sources = {
+                key: (
+                    pitch_fix(value)
+                    if self.is_pitch_change
+                    else value
+                )
+                for key, value in zip(
+                    self.mdx_c_configs.training.instruments,
+                    estimated_sources.cpu().detach().numpy(),
+                )
+            }
+
             if self.is_denoise_model:
                 if VOCAL_STEM in sources.keys() and INST_STEM in sources.keys():
-                    sources[VOCAL_STEM] = vr_denoiser(sources[VOCAL_STEM], self.device, model_path=self.DENOISER_MODEL)
+                    sources[VOCAL_STEM] = vr_denoiser(
+                        sources[VOCAL_STEM],
+                        self.device,
+                        model_path=self.DENOISER_MODEL,
+                    )
                     if sources[VOCAL_STEM].shape[1] != org_mix.shape[1]:
-                        sources[VOCAL_STEM] = spec_utils.match_array_shapes(sources[VOCAL_STEM], org_mix)
+                        sources[VOCAL_STEM] = spec_utils.match_array_shapes(
+                            sources[VOCAL_STEM],
+                            org_mix,
+                        )
                     sources[INST_STEM] = org_mix - sources[VOCAL_STEM]
-                            
-            return sources
         else:
-            est_s = estimated_sources.cpu().detach().numpy()
-            return pitch_fix(est_s) if self.is_pitch_change else est_s
+            source = estimated_sources.cpu().detach().numpy()
+            sources = pitch_fix(source) if self.is_pitch_change else source
+
+        return sources
 
 class SeperateDemucs(SeperateAttributes):
     def seperate(self):
