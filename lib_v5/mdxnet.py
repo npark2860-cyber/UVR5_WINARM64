@@ -1,11 +1,10 @@
 import torch
 import torch.nn as nn
 from .modules import TFC_TDF
-from pytorch_lightning import LightningModule
 
 dim_s = 4
 
-class AbstractMDXNet(LightningModule):
+class AbstractMDXNet(nn.Module):
     def __init__(self, target_name, lr, optimizer, dim_c, dim_f, dim_t, n_fft, hop_length, overlap):
         super().__init__()
         self.target_name = target_name
