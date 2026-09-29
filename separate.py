@@ -17,7 +17,7 @@ from gui_data.error_handling import *
 from scipy import signal
 import audioread
 import gzip
-import librosa
+from lib_v5.optional_deps import librosa
 import math
 import numpy as np
 import onnxruntime as ort
@@ -32,7 +32,6 @@ import math
 #import random
 from tqdm import tqdm
 from onnx import load
-from onnx2pytorch import ConvertModel
 
 if TYPE_CHECKING:
     from UVR import ModelData
@@ -451,7 +450,8 @@ class SeperateMDX(SeperateAttributes):
                     ort_ = ort.InferenceSession(self.model_path, providers=self.run_type)
                     self.model_run = lambda spek:ort_.run(None, {'input': spek.cpu().numpy()})[0]
                 else:
-                    self.model_run = ConvertModel(load(self.model_path))
+                    from onnx2pytorch import ConvertModel
+            self.model_run = ConvertModel(load(self.model_path))
                     self.model_run.to(self.device).eval()
 
             self.initialize_model_settings()
