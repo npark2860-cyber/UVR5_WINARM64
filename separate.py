@@ -451,7 +451,7 @@ class SeperateMDX(SeperateAttributes):
                     self.model_run = lambda spek:ort_.run(None, {'input': spek.cpu().numpy()})[0]
                 else:
                     from onnx2pytorch import ConvertModel
-            self.model_run = ConvertModel(load(self.model_path))
+                    self.model_run = ConvertModel(load(self.model_path))
                     self.model_run.to(self.device).eval()
 
             self.initialize_model_settings()
