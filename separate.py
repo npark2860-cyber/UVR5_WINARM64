@@ -913,12 +913,26 @@ class SeperateMDXC(SeperateAttributes):
 
         return static_path
 
+    def _mdx23c_arm64_qnn_context_path(self, mdx_segment_size):
+        static_path = self._mdx23c_arm64_qnn_path(mdx_segment_size)
+        root, _ = os.path.splitext(static_path)
+        return f"{root}.ctx.onnx"
+
     def _create_mdx23c_arm64_qnn_session(self, mdx_segment_size):
         import onnxruntime_qnn as qnn_ep
 
-        static_path = self._ensure_mdx23c_arm64_qnn_model(
+        # Never compile inside the UVR GUI process. If a precompiled QNN
+        # context is not ready, fall back to CPU ORT instead of freezing the UI.
+        self._ensure_mdx23c_arm64_qnn_model(mdx_segment_size)
+        context_path = self._mdx23c_arm64_qnn_context_path(
             mdx_segment_size
         )
+
+        if not os.path.isfile(context_path):
+            raise RuntimeError(
+                "QNN context cache is not prepared. Run "
+                "scripts\\prepare-mdx23c-qnn-context.ps1 first."
+            )
 
         ep_name = "QNNExecutionProvider"
         qnn_devices = [
@@ -958,22 +972,21 @@ class SeperateMDXC(SeperateAttributes):
             {
                 "backend_path": qnn_ep.get_qnn_htp_path(),
                 "htp_performance_mode": "burst",
-                "htp_graph_finalization_optimization_mode": "3",
             },
         )
 
         print(
-            f"[ARM64 QNN] Compiling MDX23C for Snapdragon NPU "
-            f"frames={mdx_segment_size}",
+            f"[ARM64 QNN] Loading precompiled NPU context: "
+            f"{os.path.basename(context_path)}",
             flush=True,
         )
         session_started = time.perf_counter()
         session = ort.InferenceSession(
-            static_path,
+            context_path,
             sess_options=options,
         )
         print(
-            f"[ARM64 QNN] NPU session ready elapsed="
+            f"[ARM64 QNN] NPU context loaded elapsed="
             f"{time.perf_counter() - session_started:.3f}s",
             flush=True,
         )
