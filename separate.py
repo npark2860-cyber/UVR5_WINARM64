@@ -943,11 +943,10 @@ class SeperateMDXC(SeperateAttributes):
     ):
         import onnxruntime_qnn as qnn_ep
 
-        candidate_batch_sizes = []
-        for candidate in (preferred_batch_size, 1):
-            candidate = int(candidate)
-            if candidate not in candidate_batch_sizes:
-                candidate_batch_sizes.append(candidate)
+        # Batch 4 has been proven unstable on Snapdragon HTP for this graph
+        # (QNN_COMMON_ERROR_SYSTEM 1003). Keep runtime candidates hard-limited
+        # to batch 2, then batch 1 fallback.
+        candidate_batch_sizes = [2, 1]
 
         available_contexts = []
         for candidate in candidate_batch_sizes:
@@ -1093,7 +1092,7 @@ class SeperateMDXC(SeperateAttributes):
                     qnn_batch_size,
                 ) = self._create_mdx23c_arm64_qnn_session(
                     mdx_segment_size,
-                    preferred_batch_size=4,
+                    preferred_batch_size=2,
                 )
                 use_arm64_qnn = True
                 print(
