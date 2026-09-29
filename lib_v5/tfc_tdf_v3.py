@@ -239,3 +239,14 @@ class TFC_TDF_net(nn.Module):
         return x
 
 
+
+
+class TFC_TDF_Core(nn.Module):
+    """Export wrapper for the MDX23C neural-network spectrogram core."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, spectrogram):
+        return self.model.forward_spectrogram(spectrogram)
