@@ -4,6 +4,8 @@ from screeninfo import get_monitors
 from PIL import Image
 from PIL import ImageTk
 
+IMAGE_RESAMPLE_LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
+
 OPERATING_SYSTEM = platform.system()
 
 def get_screen_height():
@@ -132,9 +134,9 @@ class ImagePath():
         if size is not None:
             size = (int(size[0]), int(size[1]))
             if keep_aspect:
-                img = img.resize((size[0], int(size[0] * ratio)), Image.ANTIALIAS)
+                img = img.resize((size[0], int(size[0] * ratio)), IMAGE_RESAMPLE_LANCZOS)
             else:
-                img = img.resize(size, Image.ANTIALIAS)
+                img = img.resize(size, IMAGE_RESAMPLE_LANCZOS)
                 
         return ImageTk.PhotoImage(img)
 
