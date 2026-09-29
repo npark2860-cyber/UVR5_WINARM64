@@ -2,7 +2,7 @@ param(
     [ValidateSet("0","1","2","3")]
     [string]$OptimizationMode = "1",
     [ValidateRange(1,8)]
-    [int]$BatchSize = 4,
+    [int]$BatchSize = 2,
     [int]$Frames = 256,
     [string]$Model = ""
 )
