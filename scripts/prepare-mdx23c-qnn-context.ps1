@@ -1,6 +1,9 @@
 param(
     [ValidateSet("0","1","2","3")]
     [string]$OptimizationMode = "1",
+    [ValidateRange(1,8)]
+    [int]$BatchSize = 4,
+    [int]$Frames = 256,
     [string]$Model = ""
 )
 
@@ -16,7 +19,9 @@ Set-Location $RepoRoot
 
 $argsList = @(
     ".\scripts\prepare_mdx23c_qnn_context.py",
-    "--optimization-mode", $OptimizationMode
+    "--optimization-mode", $OptimizationMode,
+    "--batch-size", "$BatchSize",
+    "--frames", "$Frames"
 )
 
 if ($Model) {
