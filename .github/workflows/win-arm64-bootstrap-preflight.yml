@@ -8,6 +8,7 @@ on:
     paths:
       - "**/*.py"
       - "requirements-win-arm64.txt"
+      - "requirements-win-arm64-native.txt"
       - "scripts/bootstrap-win-arm64.ps1"
       - ".github/workflows/win-arm64-bootstrap-preflight.yml"
 
@@ -41,6 +42,18 @@ jobs:
             exit 1
           }
 
+  package-availability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate package pins exist
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip download --dest packagehouse --no-deps -r requirements-win-arm64.txt
+
   arm64-wheel-resolution:
     runs-on: ubuntu-latest
     steps:
@@ -48,7 +61,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Resolve CPython 3.12 Windows ARM64 wheels
+      - name: Resolve CPython 3.12 Windows ARM64 native wheels
         run: |
           python -m pip install --upgrade pip
           python -m pip download \
@@ -58,4 +71,4 @@ jobs:
             --python-version 3.12 \
             --implementation cp \
             --abi cp312 \
-            -r requirements-win-arm64.txt
+            -r requirements-win-arm64-native.txt

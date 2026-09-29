@@ -1,6 +1,7 @@
 # UVR 5.6 - Windows ARM64 native bootstrap
 # Target: CPython 3.12 ARM64
 #
+# Architecture-sensitive packages are pinned in requirements-win-arm64-native.txt.
 # PyTorch is installed separately by scripts/bootstrap-win-arm64.ps1 from the
 # official PyTorch CPU wheel index.
 #
@@ -14,33 +15,23 @@
 #   samplerate
 #   Dora / diffq
 #
-# Those packages either have no suitable CPython 3.12 Windows ARM64 wheel or
+# Those packages either have no suitable CPython 3.12 Windows ARM64 path or
 # are not required to reach the native GUI bootstrap milestone.
 
-altgraph==0.17.3
+-r requirements-win-arm64-native.txt
+
 audioread==3.0.1
-certifi
-cffi==2.1.1
 einops==0.6.0
-future==0.18.2
 julius==0.2.7
 kthread==0.2.3
 ml_collections==0.1.1
 natsort==8.2.0
-numpy==2.3.5
 omegaconf==2.2.3
-onnx==1.23.0
-onnxruntime==1.30.0
-Pillow==12.1.1
-psutil==7.2.2
 pydub==0.25.1
 pyglet==1.5.23
 pyperclip==1.8.2
 pyrubberband==0.3.0
-PyYAML==6.0.3
-scipy==1.16.3
-soundfile==0.14.0
+screeninfo==0.8.1
 tqdm
 urllib3==1.26.12
 wget==3.2
-screeninfo==0.8.1
