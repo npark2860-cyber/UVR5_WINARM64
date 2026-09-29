@@ -5,7 +5,7 @@ import audioread
 import gui_data.sv_ttk
 import hashlib
 import json
-import librosa
+from lib_v5.optional_deps import librosa, matchering as match
 import math
 import natsort
 import os
@@ -23,7 +23,6 @@ import urllib.request
 import webbrowser
 import wget
 import traceback
-import matchering as match
 import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter.font import Font
@@ -31,9 +30,6 @@ from tkinter import filedialog
 from tkinter import messagebox
 from collections import Counter
 from __version__ import VERSION, PATCH, PATCH_MAC, PATCH_LINUX
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 from gui_data.constants import *
 from gui_data.app_size_values import *
@@ -80,7 +76,7 @@ def get_execution_time(function, name):
 
 PREVIOUS_PATCH_WIN = 'UVR_Patch_3_31_23_5_5'
 
-is_dnd_compatible = True
+is_dnd_compatible = not IS_WINDOWS_ARM64
 banner_placement = -2
 
 if OPERATING_SYSTEM=="Darwin":
@@ -3055,12 +3051,13 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         right_frame = ListboxBatchFrame(menu_view_inputs_Frame, self.file_two_sub_var.get().title(), lambda:move_entry(False), self.left_img, self.img_mapper)
         right_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
-        left_frame.listbox.drop_target_register(DND_FILES)
-        right_frame.listbox.drop_target_register(DND_FILES)
-        left_frame.listbox.dnd_bind('<<Drop>>', lambda e: drag_n_drop(e, FILE_1_LB))
-        right_frame.listbox.dnd_bind('<<Drop>>', lambda e: drag_n_drop(e, FILE_2_LB))
-        left_frame.listbox.dnd_bind(right_click_button, lambda e: clear_all(e, FILE_1_LB))
-        right_frame.listbox.dnd_bind(right_click_button, lambda e: clear_all(e, FILE_2_LB))
+        if is_dnd_compatible:
+            left_frame.listbox.drop_target_register(DND_FILES)
+            right_frame.listbox.drop_target_register(DND_FILES)
+            left_frame.listbox.dnd_bind('<<Drop>>', lambda e: drag_n_drop(e, FILE_1_LB))
+            right_frame.listbox.dnd_bind('<<Drop>>', lambda e: drag_n_drop(e, FILE_2_LB))
+        left_frame.listbox.bind(right_click_button, lambda e: clear_all(e, FILE_1_LB))
+        right_frame.listbox.bind(right_click_button, lambda e: clear_all(e, FILE_2_LB))
 
         menu_view_inputs_bottom_Frame = self.menu_FRAME_SET(menu_batch_dual_top)
         menu_view_inputs_bottom_Frame.grid(row=1)
@@ -7112,6 +7109,10 @@ def vip_downloads(password, link_type=VIP_REPO):
     """Attempts to decrypt VIP model link with given input code"""
     
     try:
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
