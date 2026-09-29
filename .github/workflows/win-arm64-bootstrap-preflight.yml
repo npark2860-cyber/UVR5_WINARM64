@@ -104,6 +104,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip download \
             --dest torch-wheelhouse \
+            --no-deps \
             --only-binary=:all: \
             --platform win_arm64 \
             --python-version ${{ matrix.python-version }} \

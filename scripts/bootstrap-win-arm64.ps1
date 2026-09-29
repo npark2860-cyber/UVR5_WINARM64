@@ -27,7 +27,7 @@ Write-Host "[3/6] Updating pip"
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 
 Write-Host "[4/6] Installing native Windows ARM64 PyTorch CPU"
-& $VenvPython -m pip install "torch==2.14.0+cpu" --index-url "https://download.pytorch.org/whl/cpu"
+& $VenvPython -m pip install "torch==2.14.0+cpu" --extra-index-url "https://download.pytorch.org/whl/cpu"
 if ($LASTEXITCODE -ne 0) { throw "PyTorch ARM64 installation failed" }
 
 Write-Host "[5/6] Installing ARM64 bootstrap dependencies"
