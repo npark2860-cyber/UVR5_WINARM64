@@ -17,6 +17,7 @@ from gui_data.error_handling import *
 from scipy import signal
 import audioread
 import gzip
+import gc
 from lib_v5.optional_deps import librosa
 import math
 import time
