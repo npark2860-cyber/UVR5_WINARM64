@@ -939,14 +939,14 @@ class SeperateMDXC(SeperateAttributes):
     def _create_mdx23c_arm64_qnn_session(
         self,
         mdx_segment_size,
-        preferred_batch_size=2,
+        preferred_batch_size=1,
     ):
         import onnxruntime_qnn as qnn_ep
 
-        # Batch 4 has been proven unstable on Snapdragon HTP for this graph
-        # (QNN_COMMON_ERROR_SYSTEM 1003). Keep runtime candidates hard-limited
-        # to batch 2, then batch 1 fallback.
-        candidate_batch_sizes = [2, 1]
+        # MDX23C 8KFFT is only stable on Snapdragon HTP at batch 1.
+        # Batch 2 and 4 both fail at execution with QNN_COMMON_ERROR_SYSTEM
+        # (1003), so never select those cached contexts at runtime.
+        candidate_batch_sizes = [1]
 
         available_contexts = []
         for candidate in candidate_batch_sizes:
@@ -1092,7 +1092,7 @@ class SeperateMDXC(SeperateAttributes):
                     qnn_batch_size,
                 ) = self._create_mdx23c_arm64_qnn_session(
                     mdx_segment_size,
-                    preferred_batch_size=2,
+                    preferred_batch_size=1,
                 )
                 use_arm64_qnn = True
                 print(
