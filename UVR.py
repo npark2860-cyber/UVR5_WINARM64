@@ -11,7 +11,6 @@ import natsort
 import os
 import pickle
 import psutil
-from pyglet import font as pfont
 import pyperclip
 import base64
 import queue
@@ -128,6 +127,17 @@ if not is_windows:
     ssl._create_default_https_context = ssl._create_unverified_context
 else:
     from ctypes import windll, wintypes
+
+def add_font_file(font_path):
+    if is_windows:
+        # Register the bundled font privately for this process using the native
+        # Win32 API. This avoids pyglet's legacy COM layer on Python 3.13 ARM64.
+        result = windll.gdi32.AddFontResourceExW(str(font_path), 0x10, 0)
+        if result == 0:
+            print(f"Warning: failed to register font: {font_path}")
+    else:
+        from pyglet import font as pfont
+        pfont.add_file(font_path)
     
 def close_process(q:queue.Queue):
     def close_splash():
@@ -1542,12 +1552,12 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
         if chosen_font_name:
             gui_data.sv_ttk.set_theme("dark", chosen_font_name, 10)
             if chosen_font_file:
-                pfont.add_file(chosen_font_file)
+                add_font_file(chosen_font_file)
             self.font_set = Font(family=chosen_font_name, size=FONT_SIZE_F2)
             self.font_entry = Font(family=chosen_font_name, size=FONT_SIZE_F2)
         else:
-            pfont.add_file(FONT_MAPPER[MAIN_FONT_NAME])
-            pfont.add_file(FONT_MAPPER[SEC_FONT_NAME])
+            add_font_file(FONT_MAPPER[MAIN_FONT_NAME])
+            add_font_file(FONT_MAPPER[SEC_FONT_NAME])
             gui_data.sv_ttk.set_theme("dark", MAIN_FONT_NAME, 10)
             self.font_set = Font(family=SEC_FONT_NAME, size=FONT_SIZE_F2)
             self.font_entry = Font(family=MAIN_FONT_NAME, size=FONT_SIZE_F2)
