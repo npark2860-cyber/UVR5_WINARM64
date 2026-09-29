@@ -14,7 +14,7 @@ import typing as tp
 
 import logging
 
-from diffq import DiffQuantizer
+from .diffq_compat import DiffQuantizer
 import torch.hub
 
 from .model import Demucs
